@@ -60,14 +60,32 @@ var dataPerPage = 8;
 var currentSortBy = "id";
 var currentOrder = "desc";
 var totalRows = 0;
+var currentSearchQuery = "";
 var isServerSorting = false;
 
 // 서버에서 데이터 받아오기
-function fetchData({ page = 1, limit = 8 }, callback) {
+function fetchData(
+  { page = 1, limit = 8, query = currentSearchQuery },
+  callback
+) {
   var skip = (page - 1) * limit;
-  var url = `https://dummyjson.com/posts?limit=${limit}&skip=${skip}`;
-  if (currentSortBy && currentOrder) {
-    url += `&sortBy=${currentSortBy}&order=${currentOrder}`;
+  var url;
+
+  if (query) {
+    // 검색어가 있는 경우
+    url = `https://dummyjson.com/posts/search?q=${encodeURIComponent(
+      query
+    )}&limit=${limit}&skip=${skip}`;
+
+    if (currentSortBy && currentOrder) {
+      url += `&sortBy=${currentSortBy}&order=${currentOrder}`;
+    }
+  } else {
+    // 검색어가 없는 경우 (기존 로직)
+    url = `https://dummyjson.com/posts?limit=${limit}&skip=${skip}`;
+    if (currentSortBy && currentOrder) {
+      url += `&sortBy=${currentSortBy}&order=${currentOrder}`;
+    }
   }
 
   console.log("fetchData url", url);
@@ -105,6 +123,7 @@ function createGrid(container) {
     {
       page: currentPage,
       limit: dataPerPage,
+      query: currentSearchQuery, // 초기 검색어 전달 (빈 문자열)
     },
     function (rows, total) {
       dataProvider.setRows(rows);
@@ -140,6 +159,78 @@ function createGrid(container) {
 
 function start() {
   createGrid("realgrid");
+
+  // 검색 버튼 이벤트 리스너 추가
+  var searchButton = document.getElementById("searchButton");
+  var searchInput = document.getElementById("searchInput");
+
+  if (searchButton && searchInput) {
+    searchButton.addEventListener("click", function () {
+      currentSearchQuery = searchInput.value;
+      console.log("Search button clicked. Query:", currentSearchQuery);
+
+      var targetPage = 1;
+
+      //currentPage = targetPage; // 검색 시 항상 첫 페이지로 설정
+
+      if (currentPage === targetPage && $("#page").data("pagination")) {
+        // 현재 페이지가 1페이지이고 페이지네이션이 이미 초기화된 경우,
+        // pagination("go", 1)이 콜백을 트리거하지 않을 수 있으므로 fetchData와 setPaging을 직접 호출합니다.
+        console.log(
+          "Search on page 1: Fetching data directly and resetting pagination."
+        );
+        currentPage = targetPage; // currentPage를 명시적으로 설정
+        fetchData(
+          {
+            page: currentPage,
+            limit: dataPerPage,
+            query: currentSearchQuery,
+          },
+          function (rows, total) {
+            dataProvider.setRows(rows);
+            totalRows = total;
+            setPaging(); // 검색 결과에 따라 페이지네이션을 다시 설정합니다.
+          }
+        );
+      } else if ($("#page").data("pagination")) {
+        // 현재 페이지가 1페이지가 아니거나 페이지네이션이 초기화된 경우,
+        // pagination("go", 1)을 호출하여 페이지네이션 콜백을 통해 데이터를 로드합니다.
+        console.log(
+          "Search from another page or pagination ready: Using pagination('go', 1)."
+        );
+        // currentPage를 여기서 1로 설정하면, pagination 콜백 내의 `pagination.pageNumber !== currentPage` 조건이 false가 될 수 있습니다.
+        // 콜백 함수가 currentPage를 기준으로 동작하도록 currentPage 변경은 콜백 내부 또는 직전에 이루어져야 합니다.
+        // 혹은 pagination 라이브러리가 항상 콜백을 호출하도록 기대합니다.
+        // 여기서는 onPageChange가 currentPage를 pagination.pageNumber 기준으로 설정하므로 go(1)만 호출합니다.
+        $("#page").pagination("go", targetPage);
+      } else {
+        // 페이지네이션이 아직 초기화되지 않은 경우 (예: 초기 로딩 중 검색 시도 - 거의 없는 케이스)
+        console.log(
+          "Search with uninitialized pagination: Fetching data directly."
+        );
+        currentPage = targetPage; // currentPage를 명시적으로 설정
+        fetchData(
+          {
+            page: currentPage,
+            limit: dataPerPage,
+            query: currentSearchQuery,
+          },
+          function (rows, total) {
+            dataProvider.setRows(rows);
+            totalRows = total;
+            setPaging();
+          }
+        );
+      }
+    });
+
+    // Enter 키로 검색 실행
+    searchInput.addEventListener("keypress", function (event) {
+      if (event.key === "Enter") {
+        searchButton.click();
+      }
+    });
+  }
 }
 
 // $.document.ready(start);
@@ -165,16 +256,26 @@ function pagination() {
     pageSize: dataPerPage,
     pageNumber: currentPage,
     callback: function (data, pagination) {
-      if (pagination.pageNumber !== currentPage) {
+      if (
+        pagination.pageNumber !== currentPage ||
+        currentSearchQuery !== $("#searchInput").val()
+      ) {
+        // 페이지 번호가 변경되었거나, 검색어가 변경된 후 페이지네이션으로 인해 다시 호출된 경우
         currentPage = pagination.pageNumber;
+        // currentSearchQuery는 검색 버튼 클릭 시 이미 업데이트 되었으므로, 여기서는 fetchData에만 전달
         fetchData(
           {
             page: currentPage,
             limit: dataPerPage,
+            query: currentSearchQuery, // fetchData에 검색어 전달
           },
           function (rows, total) {
             dataProvider.setRows(rows);
             totalRows = total;
+            // 검색 시에는 페이지네이션 dataSource가 변경되므로, 항상 setPaging()을 호출하여
+            // 페이지네이션을 다시 그리도록 하는 것이 안전할 수 있으나,
+            // 현재 pagination 라이브러리는 dataSource를 직접 업데이트하는 방식이 아니므로
+            // totalRows만 업데이트해도 될 수 있습니다. 여기서는 totalRows만 업데이트합니다.
           }
         );
       }
@@ -187,10 +288,15 @@ function setPaging() {
 }
 
 function onPageChange(data, pagination) {
+  // onSorting -> pagination.go(1) -> onPageChange 순으로 호출될 때,
+  // pagination.pageNumber가 현재 페이지와 다를 수 있음.
+  // fetchData 호출 시 항상 pagination.pageNumber를 사용하도록 함.
+  currentPage = pagination.pageNumber;
   fetchData(
     {
-      page: pagination.pageNumber,
+      page: currentPage, // pagination.pageNumber 대신 currentPage 사용
       limit: dataPerPage,
+      query: currentSearchQuery, // fetchData에 검색어 전달
     },
     function (rows, total) {
       dataProvider.setRows(rows);
